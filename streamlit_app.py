@@ -1,56 +1,75 @@
 import streamlit as st
-from openai import OpenAI
+import requests
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+st.set_page_config(page_title="Insurance Chatbot", page_icon="💬")
+st.title("💬 Insurance Support Chatbot")
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
+# 🔒 SnapLogic API details — replace with your actual values
+SNAPLOGIC_URL = "https://emea.snaplogic.com/api/1/rest/slsched/feed/ConnectFasterInc/projects/Jonny%20Baggott/JB%20-%20Policy%20Query%20Task"
+BEARER_TOKEN = "RH6OjJkwrXKF3UFHcVj76rTXdRH4WJin"
+
+# Initialize session state
+if 'chat_started' not in st.session_state:
+    st.session_state.chat_started = False
+
+# Step 1: Ask if user has a question (policy number should be included)
+if not st.session_state.chat_started:
+    with st.form("question_form"):
+        st.subheader("👋 What would you like to ask about your insurance policy?")
+        st.markdown("➡️ Please include your policy number in your question.")
+        question = st.text_area("Your question")
+        submitted = st.form_submit_button("Submit")
+
+        if submitted and question.strip():
+            st.session_state.question = question.strip()
+            st.session_state.chat_started = True
+        elif submitted:
+            st.warning("Please enter your question including your policy number.")
 else:
+    st.write(f"📨 **You asked:** {st.session_state.question}")
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+    # Step 2: Send to SnapLogic
+    with st.spinner("🔍 Checking your policy details..."):
+        try:
+            combined_prompt = st.session_state.question
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+            payload = [
+                {
+                    "prompt": combined_prompt
+                }
+            ]
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            headers = {
+                "Authorization": f"Bearer {BEARER_TOKEN}",
+                "Content-Type": "application/json"
+            }
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+            response = requests.post(
+                SNAPLOGIC_URL,
+                headers=headers,
+                json=payload,
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+            if isinstance(data, list) and len(data) > 0 and "answer" in data[0]:
+                answer = data[0]["answer"]
+            elif isinstance(data, dict) and "answer" in data:
+                answer = data["answer"]
+            else:
+                answer = "❓ I couldn't find the answer to your question."
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+        except Exception as e:
+            answer = f"❌ There was an error: {e}"
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    st.success("Here's what I found:")
+    st.write(f"🤖 {answer}")
+
+    # Step 3: Follow-up question
+    st.subheader("📍 Can I help you with anything else today?")
+    more_help = st.text_input("Ask another question (or leave blank to end)")
+
+    if more_help.strip():
+        st.session_state.question = more_help.strip()
+        st.experimental_rerun()
